@@ -42,6 +42,7 @@ import tempfile
 import shutil
 import zipfile
 import tarfile
+from functools import reduce
 
 # Stacscheck
 
@@ -396,8 +397,7 @@ def try_parse_config_file(basedir):
         warn_print("practical.config does not have an [info] section")
         sys.exit(1)
 
-    valid_options = ['course', 'practical', 'srcdir', 'timeout', 'version']
-
+    valid_options = ['course', 'practical', 'srcdir', 'timeout', 'version', 'practicalroot', 'main']
     for option in config.options('info'):
         if not (option in valid_options):
             warn_print("Don't understand option '" + option + "'")
@@ -423,13 +423,24 @@ def try_parse_config_file(basedir):
     return parentdir
 
 # Walk directory tree under 'rootdir', finding all directories with 'name'.
-def find_all_directories_with_name(name, rootdir):
+def find_all_directories_with_name(names, rootdir):
+    maindirlist = []
+    srcdirlist = []
     dirlist = []
-    for root, subfolders, _ in os.walk(rootdir):
+    for root, subfolders, filenames in os.walk(rootdir):
+        if 'main' in CONFIG:
+            for filename in filenames:
+                if filename == CONFIG['main']:
+                    maindirlist.append(os.path.dirname(os.path.join(root, filename)))
         for dirname in subfolders:
-            if dirname == name and ("/__MACOSX" not in os.path.join(root, dirname)):
-                dirlist.append(os.path.join(root, dirname))
-    return sorted(dirlist)
+            for name in names.split(';'):
+                if dirname == name and ("/__MACOSX" not in os.path.join(root, dirname)) and not dirname.startswith("."):
+                    srcdirlist.append(os.path.join(root, dirname))
+        if len(maindirlist) > 0:
+            dirlist = maindirlist
+        else:
+            dirlist = srcdirlist
+    return sorted(set(dirlist), key=len, reverse=True)
 
 # Find the directory the code is stored in, using 'srcdir' from CONFIG.
 # If 'srcdir' is not defined, assume current directory, else search for a directory called
@@ -443,18 +454,27 @@ def find_code_directory(start_dir=None):
     else:
         current_dir = os.path.realpath(os.getcwd())
 
-    in_srcdir = (os.path.basename(current_dir) == CONFIG['srcdir'])
+    in_srcdir = reduce((lambda x, y: True if (x or os.path.basename(current_dir) == y) else False), CONFIG['srcdir'].split(';'), '')
     recursive_srcdir = find_all_directories_with_name(CONFIG['srcdir'], current_dir)
     # print("--- Trying to find code directory in " + str(start_dir))
     info_print_nonewline("- Looking for submission in a directory called '" + CONFIG['srcdir'] + "': ")
 
     if not in_srcdir and len(recursive_srcdir) == 0:
         info_print("Cannot find it....")
+        info_print("Please put your submission in any directory called one of '" + CONFIG['srcdir'] + "'")
         if not TRYHARDER:
             raise EnvironmentError("No submission found. Try running with --archive <filename> if submission is compressed.")
         else:
-            info_print("Going to try hard, and guess the current directory. I'm probably wrong.")
-            return None
+            if 'practicalroot' in CONFIG:
+                info_print("Going to try harder, and look for the practical directory")
+                recursive_srcdir = find_all_directories_with_name(CONFIG['practicalroot'], current_dir)
+                info_print_nonewline("- Looking for submission practical directories called '" + CONFIG['practicalroot'] + "': ")
+            if not in_srcdir and len(recursive_srcdir) == 0 and 'practicalroot' in CONFIG:
+                info_print("Still cannot find it....")
+                info_print("Please put your submission in any directory called one of '" + CONFIG['srcdir'] + "'")
+            if not in_srcdir and len(recursive_srcdir) == 0:
+                info_print("Going to give up, and guess the current directory. I'm probably wrong.")
+                return None
 
     if in_srcdir and len(recursive_srcdir) == 0:
         info_print("Already in it!")
@@ -462,7 +482,7 @@ def find_code_directory(start_dir=None):
 
     if len(recursive_srcdir) == 1 and not in_srcdir:
         reldir = os.path.relpath(recursive_srcdir[0], current_dir)
-        if reldir == CONFIG['srcdir']:
+        if reldir in CONFIG['srcdir'].split(';'):
             info_print("found in current directory")
         else:
             info_print("found at '" + os.path.relpath(recursive_srcdir[0], current_dir) + "'")
@@ -479,8 +499,27 @@ def find_code_directory(start_dir=None):
     info_print("- Warning, there are multiple subdirectories called '" + CONFIG['srcdir'] + "'.")
     for d in recursive_srcdir:
         info_print(" - found " + d)
-    info_print("Please go into the correct directory.")
-    sys.exit(1)
+    guessed = lookup_practical_root(recursive_srcdir)
+    if not guessed:
+        info_print("Going to give up, and guess the current directory. I'm probably wrong.")
+        return None
+    info_print("- I'm going to guess '" + str(guessed)  + "'.")
+    info_print("- If that's wrong, go into the correct directory.")
+    return guessed
+
+def lookup_practical_root(recursive_srcdir):
+    recursive_srcdir = [srcdir for srcdir in recursive_srcdir if ('ext' not in srcdir.lower() and 'out' not in srcdir.lower() and '/.' not in srcdir.lower())]
+    if len(recursive_srcdir) == 0:
+        return None
+    guessed = recursive_srcdir[0]
+    if 'practicalroot' in CONFIG:
+        for d in recursive_srcdir:
+            for practical_root in CONFIG['practicalroot'].split(';'):
+                if practical_root in d and '/out/' not in d:
+                    guessed = d
+    else:
+        guessed = recursive_srcdir[-1]
+    return guessed
 
 def maybe_print_test_input(test):
     if VERBOSE and not test["pass"]:
