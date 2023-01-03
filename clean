@@ -1,0 +1,8 @@
+#!/bin/bash
+
+find . -type f -name '*.class' -delete
+find . -type f -name '._*' -delete
+find . -type f -name '~$*' -delete
+find . -type f -name '.DS*' -delete
+find . -type f -name '*~' -delete
+find . -type f -name '.~*' -delete
